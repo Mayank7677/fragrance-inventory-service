@@ -6,6 +6,12 @@ import { AuthenticatedRequest } from "../middlewares/admin.middleware";
 import { IVariantDocument } from "../schema/variant.schema";
 import axios from "axios";
 
+interface StockUpdate {
+  variantId: string;
+  quantity: number;
+  type: "increase" | "decrease" | "set"; // Add = increase, Reduce = decrease, Set = overwrite
+}
+
 export const createVariant = catchAsync(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     const { productId } = req.params;
@@ -173,7 +179,7 @@ export const updateStock = catchAsync(
 export const updateDiscount = catchAsync(
   async (req: Request, res: Response, next: NextFunction) => {
     const { variantId } = req.params;
-    const { discountPercent  } = req.body;
+    const { discountPercent } = req.body;
 
     if (discountPercent < 0 || discountPercent > 100) {
       return next(
@@ -223,6 +229,67 @@ export const updateVariantStatus = catchAsync(
   }
 );
 
+export const bulkUpdateStock = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const updates: StockUpdate[] = req.body.updates;
 
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return next(new AppError("Updates array is required", 400));
+    }
 
-// TO-DO => bulkUpdateStock 
+    const bulkOps = [];
+
+    for (const update of updates) {
+      const { variantId, quantity, type } = update;
+
+      if (
+        !variantId ||
+        quantity == null ||
+        !["increase", "decrease", "set"].includes(type)
+      ) {
+        return next(new AppError("Invalid update format", 400));
+      }
+
+      // Fetch current variant to validate
+      const variant = await Variant.findById(variantId);
+      if (!variant) {
+        return next(new AppError(`Variant not found: ${variantId}`, 404));
+      }
+
+      let newStock = variant.stock;
+
+      if (type === "increase") {
+        newStock += quantity;
+      } else if (type === "decrease") {
+        if (variant.stock < quantity) {
+          return next(
+            new AppError(
+              `Not enough stock to reduce for variant: ${variantId}`,
+              400
+            )
+          );
+        }
+        newStock -= quantity;
+      } else if (type === "set") {
+        newStock = quantity;
+      }
+
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: variantId },
+          update: { $set: { stock: newStock } },
+        },
+      });
+    }
+
+    if (bulkOps.length === 0) {
+      return next(new AppError("No valid stock updates found", 400));
+    }
+
+    await Variant.bulkWrite(bulkOps);
+
+    res.status(200).json({
+      message: "Stock updated successfully",
+    });
+  }
+);

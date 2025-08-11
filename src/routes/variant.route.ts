@@ -1,5 +1,6 @@
 import express from "express";
 import {
+    bulkUpdateStock,
   createVariant,
   getAllVariants,
   getVariantById,
@@ -34,6 +35,12 @@ variantRouter.patch(
   authMiddleware,
   isAdmin,
   updateVariantStatus
+);
+variantRouter.patch(
+  "/bulk-update-stocks",
+  authMiddleware,
+  isAdmin,
+  bulkUpdateStock
 );
 
 export default variantRouter;
