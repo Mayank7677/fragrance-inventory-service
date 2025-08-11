@@ -5,7 +5,9 @@ import {
   getAllVariants,
   getVariantById,
   getVariantsByProduct,
+  removeDiscount,
   updateDiscount,
+  updateDiscountByProductId,
   updateStock,
   updateVariantStatus,
 } from "../controllers/variant.controller";
@@ -41,6 +43,20 @@ variantRouter.patch(
   authMiddleware,
   isAdmin,
   bulkUpdateStock
+);
+variantRouter.patch(
+  "/bulk-discount-by-product/:productId",
+  authMiddleware,
+  isAdmin,
+  updateDiscountByProductId
+);
+
+// remove discount
+variantRouter.patch(
+  "/remove-discount/:variantId",
+  authMiddleware,
+  isAdmin,
+  removeDiscount
 );
 
 export default variantRouter;

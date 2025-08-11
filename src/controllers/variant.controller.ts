@@ -175,7 +175,7 @@ export const updateStock = catchAsync(
   }
 );
 
-// Update discount
+// Update discount => single variant
 export const updateDiscount = catchAsync(
   async (req: Request, res: Response, next: NextFunction) => {
     const { variantId } = req.params;
@@ -293,3 +293,100 @@ export const bulkUpdateStock = catchAsync(
     });
   }
 );
+
+// update discount => by Product Id
+export const updateDiscountByProductId = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { productId } = req.params;
+    const { discountPercent } = req.body;
+
+    if (!productId) {
+      return next(new AppError("Product ID is required", 400));
+    }
+
+    if (discountPercent < 0 || discountPercent > 100) {
+      return next(
+        new AppError("Discount percent must be between 0 and 100", 400)
+      );
+    }
+
+    // check product exists or not
+    const productResponse = await axios.get(
+      `${process.env.PRODUCT_SERVICE_URL}/api/products/${productId}`
+    );
+    if (!productResponse.data) next(new AppError("Product not found", 404));
+
+    const variants = await Variant.find({ productId });
+    if (variants.length === 0) {
+      return next(new AppError("No variants found for this product", 404));
+    }
+
+    for (const variant of variants) {
+      variant.discountPercent = discountPercent;
+      variant.discountPrice =
+        discountPercent > 0
+          ? Math.round(variant.price - (variant.price * discountPercent) / 100)
+          : 0;
+      await variant.save();
+    }
+
+    res.status(200).json({
+      message: "Discount updated successfully",
+    });
+  }
+);
+
+// Remove discount
+export const removeDiscount = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { variantId } = req.params;
+
+    const variant = await Variant.findById(variantId);
+    if (!variant) {
+      return next(new AppError("Variant not found", 404));
+    }
+
+    // Reset discount
+    variant.discountPercent = 0;
+    variant.discountPrice = 0;
+
+    await variant.save();
+
+    res.status(200).json({
+      message: "Discount removed successfully",
+      variant,
+    });
+  }
+);
+
+
+export const bulkRemoveDiscount = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { updates } = req.body;
+    // updates: [{ variantId: "...", remove: true }, ...]
+
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return next(new AppError("No updates provided", 400));
+    }
+
+    const bulkOps = updates.map(({ variantId }) => ({
+      updateOne: {
+        filter: { _id: variantId },
+        update: {
+          $set: {
+            discountPercent: 0,
+            discountPrice: 0
+          }
+        }
+      }
+    }));
+
+    const result = await Variant.bulkWrite(bulkOps);
+
+    res.status(200).json({
+      message: "Discounts removed successfully",
+      modifiedCount: result.modifiedCount
+    });
+  }
+);
+
