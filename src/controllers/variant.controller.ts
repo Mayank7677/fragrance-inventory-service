@@ -159,6 +159,26 @@ export const getVariantsByProduct = catchAsync(
   }
 );
 
+export const getVariantsByProductIds = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { productIds } = req.body;
+
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return next(new AppError("productIds array is required", 400));
+    }
+
+    const variants = await Variant.find({ productId: { $in: productIds } });
+
+    res.status(200).json({ variants });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // Get variant by ID
 export const getVariantById = catchAsync(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {

@@ -8,6 +8,7 @@ import {
   getAllVariants,
   getVariantById,
   getVariantsByProduct,
+  getVariantsByProductIds,
   prepareBulkDiscount,
   removeDiscountByProductId,
   removeDiscountByVariantId,
@@ -40,6 +41,7 @@ variantRouter.post(
 // get
 variantRouter.get("/:variantId", getVariantById);
 variantRouter.get("/by-product/:productId", getVariantsByProduct);
+variantRouter.post("/by-product-ids", getVariantsByProductIds);
 variantRouter.get("/", getAllVariants);
 
 // update
