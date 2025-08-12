@@ -1,14 +1,17 @@
 import express from "express";
 import {
   bulkUpdateDiscountFromProductService,
-    bulkUpdateStock,
+  bulkUpdateStock,
+  commitBulkDiscount,
   createVariant,
   getAllVariants,
   getVariantById,
   getVariantsByProduct,
+  prepareBulkDiscount,
   removeDiscountByProductId,
   removeDiscountByVariantId,
   removeDiscountFromProductService,
+  rollbackBulkDiscount,
   updateDiscount,
   updateDiscountByProductId,
   updateStock,
@@ -20,7 +23,12 @@ import { isAdmin } from "../middlewares/admin.middleware";
 const variantRouter = express.Router();
 
 // create
-variantRouter.post("/create/:productId", authMiddleware, isAdmin, createVariant);
+variantRouter.post(
+  "/create/:productId",
+  authMiddleware,
+  isAdmin,
+  createVariant
+);
 
 // get
 variantRouter.get("/:variantId", getVariantById);
@@ -55,19 +63,18 @@ variantRouter.patch(
 );
 
 // from product-service
-variantRouter.patch(
-  "/update-discount-by-collection",
-  authMiddleware,
-  isAdmin,
-  bulkUpdateDiscountFromProductService
-);
+// variantRouter.patch(
+//   "/update-discount-by-collection",
+//   authMiddleware,
+//   isAdmin,
+//   bulkUpdateDiscountFromProductService
+// );
 variantRouter.patch(
   "/remove-discount-by-collection",
   authMiddleware,
   isAdmin,
   removeDiscountFromProductService
 );
-
 
 // remove discount by variantId
 variantRouter.patch(
@@ -91,6 +98,27 @@ variantRouter.patch(
   authMiddleware,
   isAdmin,
   updateVariantStatus
+);
+
+// -------------------------------------------------------------------------------------
+
+variantRouter.patch(
+  "/update-discount-by-collection",
+  authMiddleware,
+  isAdmin,
+  prepareBulkDiscount
+);
+variantRouter.post(
+  "/commit-bulk-discount",
+  authMiddleware,
+  isAdmin,
+  commitBulkDiscount
+);
+variantRouter.post(
+  "/rollback-bulk-discount",
+  authMiddleware,
+  isAdmin,
+  rollbackBulkDiscount
 );
 
 export default variantRouter;

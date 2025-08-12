@@ -6,6 +6,9 @@ import { AuthenticatedRequest } from "../middlewares/admin.middleware";
 import { IVariantDocument } from "../schema/variant.schema";
 import axios from "axios";
 import { startSession } from "mongoose";
+import { v4 as uuidv4 } from "uuid";
+import Audit from "../models/audit.model";
+import logger from "../utils/logger";
 
 interface StockUpdate {
   variantId: string;
@@ -390,7 +393,7 @@ export const removeDiscountFromProductService = catchAsync(
       if (!Array.isArray(productIds) || productIds.length === 0) {
         throw new Error("Product IDs must be provided");
       }
-      
+
       // Fetch variants
       const variants = await Variant.find({
         productId: { $in: productIds },
@@ -495,5 +498,187 @@ export const bulkRemoveDiscount = catchAsync(
       message: "Discounts removed successfully",
       modifiedCount: result.modifiedCount,
     });
+  }
+);
+
+/**
+ * Prepare bulk discount.
+ * - Validate body: productIds[], discountPercent
+ * - Find matching variants and snapshot old discount fields
+ * - In a transaction: update variants with new discount (discountPercent + discountPrice)
+ * - Save an Audit doc with status 'pending' and the old values (items)
+ * - Return operationId to caller
+ */
+
+export const prepareBulkDiscount = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    // internal auth check
+    if (req.headers["x-internal-key"] !== process.env.INTERNAL_API_KEY) {
+      return next(new AppError("Unauthorized", 403));
+    }
+
+    const { productIds, discountPercent, initiatedBy } = req.body;
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return next(new AppError("productIds required", 400));
+    }
+    if (
+      typeof discountPercent !== "number" ||
+      discountPercent < 0 ||
+      discountPercent > 100
+    ) {
+      return next(new AppError("discountPercent must be 0..100", 400));
+    }
+
+    const session = await startSession();
+    session.startTransaction();
+
+    try {
+      // fetch variants for those products
+      const variants = await Variant.find({
+        productId: { $in: productIds },
+      }).session(session);
+      if (!variants.length) {
+        await session.abortTransaction();
+        return next(new AppError("No variants found for given products", 404));
+      }
+
+      // prepare audit items with old values
+      const items = variants.map((v) => ({
+        variantId: v._id,
+        oldDiscountPercent: v.discountPercent || 0,
+        oldDiscountPrice: v.discountPrice || 0,
+      }));
+
+      // compute new discountPrice and update each variant
+      const bulkOps = variants.map((v) => {
+        const newDiscountPrice =
+          discountPercent > 0
+            ? Math.round(v.price - (v.price * discountPercent) / 100)
+            : 0;
+        return {
+          updateOne: {
+            filter: { _id: v._id },
+            update: {
+              $set: { discountPercent, discountPrice: newDiscountPrice },
+            },
+          },
+        };
+      });
+
+      if (bulkOps.length) {
+        await Variant.bulkWrite(bulkOps, { session });
+      }
+
+      // save audit record
+      const operationId = uuidv4();
+      logger.info(`Bulk discount operationId: ${operationId}`);
+      const audit = await Audit.create(
+        [
+          {
+            operationId,
+            productIds,
+            variantCount: variants.length,
+            discountPercent,
+            status: "pending",
+            createdBy: initiatedBy || null,
+            items,
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      res.status(200).json({ operationId, variantCount: variants.length });
+    } catch (err: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new AppError("Failed preparing bulk discount: " + err.message, 500)
+      );
+    }
+  }
+);
+
+/**
+ * Commit: mark the pending audit as committed (finalize)
+ */
+export const commitBulkDiscount = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    if (req.headers["x-internal-key"] !== process.env.INTERNAL_API_KEY) {
+      return next(new AppError("Unauthorized", 403));
+    }
+
+    const { operationId } = req.body;
+    logger.info(`Committing bulk discount operationId: ${operationId}`);
+    if (!operationId) return next(new AppError("operationId required", 400));
+
+    const audit = await Audit.findOne({ operationId });
+    if (!audit) return next(new AppError("Operation not found", 404));
+    if (audit.status !== "pending")
+      return next(new AppError("Operation not pending", 400));
+
+    audit.status = "committed";
+    await audit.save();
+
+    res.status(200).json({ message: "Committed", operationId });
+  }
+);
+
+/**
+ * Rollback: revert changes using audit.items (must be called if Product Service fails)
+ */
+export const rollbackBulkDiscount = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    if (req.headers["x-internal-key"] !== process.env.INTERNAL_API_KEY) {
+      return next(new AppError("Unauthorized", 403));
+    }
+
+    const { operationId } = req.body;
+    if (!operationId) return next(new AppError("operationId required", 400));
+
+    const session = await startSession();
+    session.startTransaction();
+
+    try {
+      const audit = await Audit.findOne({ operationId });
+      if (!audit) return next(new AppError("Operation not found", 404));
+      if (audit.status !== "pending")
+        return next(new AppError("Operation not pending", 400));
+
+      const items = audit.items;
+      const bulkOps = items.map((item) => {
+        return {
+          updateOne: {
+            filter: { _id: item.variantId },
+            update: {
+              $set: {
+                discountPercent: item.oldDiscountPercent,
+                discountPrice: item.oldDiscountPrice,
+              },
+            },
+          },
+        };
+      });
+
+      if (bulkOps.length) {
+        await Variant.bulkWrite(bulkOps, { session });
+      }
+
+      audit.status = "rolledback";
+      await audit.save();
+
+      await session.commitTransaction();
+      session.endSession();
+
+      res.status(200).json({ message: "Rolledback successfully", operationId });
+    } catch (error: any) {
+      await session.abortTransaction();
+      session.endSession();
+      return next(
+        new AppError("Failed rolling back bulk discount: " + error.message, 500)
+      );
+    }
   }
 );
