@@ -51,6 +51,95 @@ export const createVariant = catchAsync(
   }
 );
 
+export const createVariants = catchAsync(
+  async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    const { productId } = req.params;
+    const { variants } = req.body; // Expecting [{ size, price, stock }, ...]
+
+    if (!productId) return next(new AppError("Product ID is required", 400));
+
+    if (!Array.isArray(variants) || variants.length === 0) {
+      return next(new AppError("Variants array is required", 400));
+    }
+
+    // Check if product exists in Product Service
+    const productResponse = await axios.get(
+      `${process.env.PRODUCT_SERVICE_URL}/api/products/${productId}`
+    );
+    if (!productResponse.data) {
+      return next(new AppError("Product not found", 404));
+    }
+
+    // Validate each variant payload
+    for (const variant of variants) {
+      if (!variant.size || typeof variant.size !== "string") {
+        return next(new AppError("Each variant must have a valid size", 400));
+      }
+      if (variant.price == null || variant.price <= 0) {
+        return next(new AppError("Each variant must have a valid price", 400));
+      }
+      if (variant.stock == null || variant.stock < 0) {
+        return next(new AppError("Each variant must have a valid stock", 400));
+      }
+    }
+
+    // Prevent duplicates in request payload
+    const sizesInRequest = variants.map((v) => v.size);
+    const hasDuplicateInRequest =
+      new Set(sizesInRequest).size !== sizesInRequest.length;
+    if (hasDuplicateInRequest) {
+      return next(
+        new AppError("Duplicate sizes found in request payload", 400)
+      );
+    }
+
+    // Prevent duplicates in DB
+    const existingVariants = await Variant.find({
+      productId,
+      size: { $in: sizesInRequest },
+    }).select("size");
+
+    if (existingVariants.length > 0) {
+      const existingSizes = existingVariants.map((v) => v.size);
+      return next(
+        new AppError(
+          `Variants with sizes already exist: ${existingSizes.join(", ")}`,
+          400
+        )
+      );
+    }
+
+    // Start transaction
+    const session = await startSession();
+    session.startTransaction();
+
+    try {
+      const createdVariants = await Variant.insertMany(
+        variants.map((v) => ({
+          productId,
+          size: v.size,
+          price: v.price,
+          stock: v.stock,
+          createdBy: req.user?.userId,
+        })),
+        { session }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      res.status(201).json({
+        message: "Variants created successfully",
+        variants: createdVariants,
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+      next(new AppError("Failed to create variants", 500));
+    }
+  }
+);
+
 // Get variants by product
 export const getVariantsByProduct = catchAsync(
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {

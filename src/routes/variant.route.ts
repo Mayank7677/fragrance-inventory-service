@@ -4,6 +4,7 @@ import {
   bulkUpdateStock,
   commitBulkDiscount,
   createVariant,
+  createVariants,
   getAllVariants,
   getVariantById,
   getVariantsByProduct,
@@ -28,6 +29,12 @@ variantRouter.post(
   authMiddleware,
   isAdmin,
   createVariant
+);
+variantRouter.post(
+  "/bulk-create/:productId",
+  authMiddleware,
+  isAdmin,
+  createVariants
 );
 
 // get
