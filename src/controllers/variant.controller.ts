@@ -5,6 +5,7 @@ import { AppError } from "../utils/appError";
 import { AuthenticatedRequest } from "../middlewares/admin.middleware";
 import { IVariantDocument } from "../schema/variant.schema";
 import axios from "axios";
+import { startSession } from "mongoose";
 
 interface StockUpdate {
   variantId: string;
@@ -336,8 +337,86 @@ export const updateDiscountByProductId = catchAsync(
   }
 );
 
-// Remove discount
-export const removeDiscount = catchAsync(
+// bulk update discount from product-service
+export const bulkUpdateDiscountFromProductService = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await startSession();
+    session.startTransaction();
+
+    try {
+      const { productIds, discountPercent } = req.body;
+
+      if (!Array.isArray(productIds) || productIds.length === 0) {
+        throw new Error("Product IDs must be provided");
+      }
+      if (discountPercent < 0 || discountPercent > 100) {
+        throw new Error("Discount percent must be between 0 and 100");
+      }
+
+      // Fetch variants
+      const variants = await Variant.find({
+        productId: { $in: productIds },
+      }).session(session);
+
+      for (const variant of variants) {
+        const discountAmount = (variant.price * discountPercent) / 100;
+        variant.discountPercent = discountPercent;
+        variant.discountPrice = Math.round(variant.price - discountAmount);
+        await variant.save({ session });
+      }
+
+      await session.commitTransaction();
+      return res
+        .status(200)
+        .json({ message: "Discount updated for all variants", success: true });
+    } catch (error) {
+      await session.abortTransaction();
+      return next(new AppError("Failed to update discount", 400));
+    } finally {
+      session.endSession();
+    }
+  }
+);
+
+// bulk update discount from product-service
+export const removeDiscountFromProductService = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const session = await startSession();
+    session.startTransaction();
+
+    try {
+      const { productIds } = req.body;
+
+      if (!Array.isArray(productIds) || productIds.length === 0) {
+        throw new Error("Product IDs must be provided");
+      }
+      
+      // Fetch variants
+      const variants = await Variant.find({
+        productId: { $in: productIds },
+      }).session(session);
+
+      for (const variant of variants) {
+        variant.discountPercent = 0;
+        variant.discountPrice = 0;
+        await variant.save({ session });
+      }
+
+      await session.commitTransaction();
+      return res
+        .status(200)
+        .json({ message: "Discount removed for all variants", success: true });
+    } catch (error) {
+      await session.abortTransaction();
+      return next(new AppError("Failed to remove discount", 400));
+    } finally {
+      session.endSession();
+    }
+  }
+);
+
+// Remove discount by variantId
+export const removeDiscountByVariantId = catchAsync(
   async (req: Request, res: Response, next: NextFunction) => {
     const { variantId } = req.params;
 
@@ -359,6 +438,35 @@ export const removeDiscount = catchAsync(
   }
 );
 
+//remove dicount by productId
+export const removeDiscountByProductId = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const { productId } = req.params;
+
+    if (!productId) next(new AppError("Product ID is required", 400));
+
+    // check product exists or not
+    const productResponse = await axios.get(
+      `${process.env.PRODUCT_SERVICE_URL}/api/products/${productId}`
+    );
+    if (!productResponse.data) next(new AppError("Product not found", 404));
+
+    const variants = await Variant.find({ productId });
+    if (variants.length === 0) {
+      return next(new AppError("No variants found for this product", 404));
+    }
+
+    for (const variant of variants) {
+      variant.discountPercent = 0;
+      variant.discountPrice = 0;
+      await variant.save();
+    }
+
+    res.status(200).json({
+      message: "Discount removed successfully",
+    });
+  }
+);
 
 export const bulkRemoveDiscount = catchAsync(
   async (req: Request, res: Response, next: NextFunction) => {
@@ -375,18 +483,17 @@ export const bulkRemoveDiscount = catchAsync(
         update: {
           $set: {
             discountPercent: 0,
-            discountPrice: 0
-          }
-        }
-      }
+            discountPrice: 0,
+          },
+        },
+      },
     }));
 
     const result = await Variant.bulkWrite(bulkOps);
 
     res.status(200).json({
       message: "Discounts removed successfully",
-      modifiedCount: result.modifiedCount
+      modifiedCount: result.modifiedCount,
     });
   }
 );
-
