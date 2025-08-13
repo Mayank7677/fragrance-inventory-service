@@ -1,11 +1,11 @@
 import express from "express";
 import {
-  bulkUpdateDiscountFromProductService,
-  bulkUpdateStock,
+    bulkUpdateStock,
   commitBulkDiscount,
   createVariant,
   createVariants,
   getAllVariants,
+  getAllVariantsByIds,
   getVariantById,
   getVariantsByProduct,
   getVariantsByProductIds,
@@ -39,6 +39,7 @@ variantRouter.post(
 );
 
 // get
+variantRouter.get("/all-by-variant-ids", getAllVariantsByIds);
 variantRouter.get("/:variantId", getVariantById);
 variantRouter.get("/by-product/:productId", getVariantsByProduct);
 variantRouter.post("/by-product-ids", getVariantsByProductIds);

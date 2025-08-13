@@ -5,7 +5,7 @@ import { AppError } from "../utils/appError";
 import { AuthenticatedRequest } from "../middlewares/admin.middleware";
 import { IVariantDocument } from "../schema/variant.schema";
 import axios from "axios";
-import { startSession } from "mongoose";
+import { startSession, Types } from "mongoose";
 import { v4 as uuidv4 } from "uuid";
 import Audit from "../models/audit.model";
 import logger from "../utils/logger";
@@ -789,5 +789,17 @@ export const rollbackBulkDiscount = catchAsync(
         new AppError("Failed rolling back bulk discount: " + error.message, 500)
       );
     }
+  }
+);
+
+export const getAllVariantsByIds = catchAsync(
+  async (req: Request, res: Response, next: NextFunction) => {
+    const ids = (req.query.variantIds as string)?.split(",") || [];
+
+    // Convert all IDs to Mongo ObjectId type
+    const objectIds = ids.map((id) => new Types.ObjectId(id));
+    console.log(objectIds);
+    const variants = await Variant.find({ _id: { $in: objectIds } });
+    res.status(200).json({ variants });
   }
 );
